@@ -1,0 +1,389 @@
+#include < iostream >
+ #include < string >
+#include < iomanip >
+#include < cmath >
+#include < algorithm >
+#include < deque >
+#include < vector >
+#include < time.h >
+  using namespace std;
+
+  enum preState
+ {
+    s_Outside,
+    s_InElevator,
+    s_InRoom,
+    s_InEleQueue,
+    s_InRoomQueue,
+    s_PlanFinished,
+      };
+   struct timmme
+ {
+    friend istream & operator >> (istream&, timmme&);
+     int hour;
+     int minute;
+     int second;
+     timmme() :hour(0), minute(0), second(0) {}
+     timmme(int hr, int mt, int sd) : hour(hr), minute(mt), second(sd) {}
+     void print()
+         {
+         printf(" %02d:%02d:%02d ", hour, minute, second);
+         }
+     timmme operator + (int stay)
+         {
+         timmme tm;
+         int tmp, tmp1;
+         tmp = (second + stay) / 60;
+         tm.second = (second + stay) % 60;
+         tmp1 = (minute + tmp) / 60;
+         tm.minute = (minute + tmp) % 60;
+         tm.hour = (hour + tmp1) % 24;
+         return tm;
+         }
+     bool operator < (timmme & rhs)
+         {
+         if (hour < rhs.hour)
+             return true;
+         else if (hour > rhs.hour)
+             return false;
+         else if (minute < rhs.minute)
+             return true;
+         else if (minute > rhs.minute)
+             return false;
+         else if (second < rhs.second)
+             return true;
+         else return false;
+         }
+     timmme & operator = (const timmme & rhs)
+        {
+        second = rhs.second;
+        minute = rhs.minute;
+         hour = rhs.hour;
+        return *this;
+         }
+     };
+ struct task
+ {
+     friend istream & operator >> (istream&, task&);
+     string xxyy;
+     int stay;
+    bool over;
+    int getRoomNum() // 获得房间号（1-100）
+         {
+         int a = (xxyy[2] == ' 1 ') ? 10 : int(xxyy[3] - ' 0 ');
+         return (getFloorNum() - 1) * 10 + a;
+         }
+     int getFloorNum() // 获得楼层号（1-10）
+         {
+         return (xxyy[0] == ' 1 ') ? 10 : int(xxyy[1] - ' 0 ');
+         }
+     task(string xy, int st) :xxyy(xy), stay(st), over(false) {}
+     task() : xxyy(" 0101 "), stay(0), over(false) {}
+       };
+ struct state
+ {
+     timmme start;
+     timmme finish;
+    bool waiting;
+     string description;
+    state() :waiting(false) {}
+    void print()
+         {
+         start.print();
+        printf(" ");
+        finish.print();
+        printf(" %s\n ", description.c_str());
+         }
+     };
+ class agent;
+ struct room
+ {
+     timmme freeUntil;
+    deque < agent*> roomQueue;
+       };
+ struct elevator
+ {
+     timmme freeUntil;
+    deque < agent*> eleQueue;
+     };
+   class agent
+ {
+     friend istream & operator >> (istream&, agent&);
+ public:
+     state st;
+     deque < task > plan;
+     agent() :prSt(s_Outside) {}
+     void SetCurrentTask() { if (plan.size()) currentTask = plan.front(); }
+     task & updateTask();
+     char& getPriority() { return priority; }
+     timmme & getBegintime() { return beginTime; }
+     preState & getPreState() { return prSt; }
+     state getState(vector < room >&, vector < elevator >&);
+    void visit(state&);
+     void print();
+    bool operator < (agent & rhs)
+         {
+        return priority < rhs.getPriority();
+         }
+ private:
+     char priority;
+    timmme beginTime;
+     task currentTask;
+    task preTask;
+     preState prSt;
+     vector < state > route;
+     };
+ task & agent::updateTask() // 更新当前任务
+ {
+     plan.pop_front();
+     return plan.front();
+     }
+ state agent::getState(vector < room >&rom, vector < elevator >&elevt)
+ {
+     if (!st.waiting) // 仅不处于等待状态的agent才更新state起始时间
+         st.start = beginTime;
+     if (currentTask.over && plan.size() == 1) // 标识结束访问状态,使日程size=0为结束的唯一标识
+         plan.pop_front();
+   if (currentTask.over && plan.size() > 1) // 仅当任务结束后更新任务
+         {
+         preTask = currentTask;
+        currentTask = updateTask();
+        }
+    room & rm = rom[currentTask.getRoomNum() - 1];
+    elevator & elev = elevt[currentTask.getFloorNum() - 1];
+     switch (prSt)
+         {
+     case s_Outside: // 前一状态：楼外
+         st.description = " Entry ";
+       st.finish = beginTime + 30;
+         prSt = (currentTask.getFloorNum() == 1) ? s_InRoomQueue : s_InEleQueue; // 进入电梯队列或房间队列
+       break;
+     case s_InEleQueue: // 前一状态：电梯队列
+        {
+             size_t i;
+             // 当前时间agent在电梯队列中的位置计算：
+                 if (st.waiting) // 等待状态时，agent已在队列中
+                 for (i = 0; i < elev.eleQueue.size() && elev.eleQueue[i]->getPriority() != priority; ++i);
+             else if (elev.eleQueue.size() == 0) // 非等待状态，队列为空，创建队列。
+                 {
+                 elev.eleQueue.push_front(this);
+                 i = 0;
+                 }
+            else // 非等待状态，队列非空，按优先级插入队列。
+                 {
+                 for (i = 0; i < elev.eleQueue.size() && elev.eleQueue[i]->getPriority() < priority; ++i);
+                 elev.eleQueue.insert(elev.eleQueue.begin() + i, this);
+                }
+           if (!i && !(beginTime < elev.freeUntil) && beginTime.second % 5) // 电梯每5秒打开，规格化begintime.
+                elev.freeUntil = beginTime + (5 - beginTime.second % 5);
+             // agent在队首且电梯可用：
+                 if (!i && !(beginTime < elev.freeUntil) && !st.waiting) // 不处于等待状态时进电梯
+                 {
+                st.description = " Stay in elevator ";
+                if (plan.size() == 0) // 访问结束下至01层
+                     st.finish = beginTime + (currentTask.getFloorNum() - 1) * 30;
+                else st.finish = beginTime + abs(currentTask.getFloorNum() - preTask.getFloorNum()) * 30; // 至下一任务房间所在层
+               elev.freeUntil = beginTime + 5; // 更新电梯可用时间
+                elev.eleQueue.pop_front(); // 从电梯队列剔除
+                prSt = s_InElevator;
+                }
+           else if (!i && !(beginTime < elev.freeUntil) && st.waiting) // 处于等待状态时，结束整个等待过程,更新state。
+                 {
+                st.description = " Waiting in elevator queue ";
+                elev.eleQueue.pop_front();
+                st.waiting = false;
+               prSt = s_InEleQueue;
+                }
+             // agent在队首但电梯不可用，或agent不在队首，进入等待状态：
+                else
+                 {
+               if (!i && beginTime < elev.freeUntil)
+                     st.finish = elev.freeUntil;
+                else st.finish = elev.eleQueue[i - 1]->getBegintime() + 5;
+                 st.waiting = true;
+                prSt = s_InEleQueue;
+                }
+           break;
+            }
+    case s_InRoomQueue: // 前一状态：房间队列
+        {
+            size_t j;
+             // 当前时间agent在房间队列位置的计算：
+                if (st.waiting) // 等待状态时，agent已在队列中
+                for (j = 0; j < rm.roomQueue.size() && rm.roomQueue[j]->getPriority() != priority; ++j);
+            else if (rm.roomQueue.size() == 0) // 非等待，队列为空，创建队列
+                {
+                 rm.roomQueue.push_front(this);
+                j = 0;
+                }
+           else // 非等待，队列非空，按优先级插入队列
+               {
+                for (j = 0; j < rm.roomQueue.size() && rm.roomQueue[j]->getPriority() < priority; ++j);
+                 rm.roomQueue.insert(rm.roomQueue.begin() + j, this);
+              }
+            // agent在队首，且房间可用
+                if (!j && !(beginTime < rm.freeUntil) && !st.waiting) // 非等待状态时，进入房间
+                {
+                 st.description = " Stay in room " + currentTask.xxyy;
+                 st.finish = beginTime + currentTask.stay;
+                rm.roomQueue.pop_front(); // 从房间队列中剔除
+                 rm.freeUntil = st.finish; // 更新房间可用时间
+                currentTask.over = true; // 标记当前任务完成
+                 prSt = s_InRoom;
+                 }
+            else if (!j && !(beginTime < rm.freeUntil) && st.waiting) // 处于等待状态时，结束整个等待过程,更新state。
+                 {
+                 st.description = " Waiting in front of room " + currentTask.xxyy;
+                 st.waiting = false;
+                 rm.roomQueue.pop_front();
+                 prSt = s_InRoomQueue;
+                 }
+             // agent在队首但房间不可用，或agent不处于队首，进入等待状态
+                 else
+                {
+                 if (!j && beginTime < rm.freeUntil)
+                     st.finish = rm.freeUntil;
+                 else st.finish = rm.roomQueue[j - 1]->getBegintime();
+                 st.waiting = true;
+                prSt = s_InRoomQueue;
+                 }
+             break;
+           }
+    case s_InElevator: // 前一状态：电梯内
+         if (plan.size() == 0) // 如果访问结束，exit。
+            {
+             st.description = " Exit ";
+             st.finish = beginTime + 30;
+             prSt = s_PlanFinished;
+             }
+         else // 否则，进入房间队列。
+            {
+            st.description = " Transfer from elevator to room " + currentTask.xxyy;
+            st.finish = beginTime + 10;
+             prSt = s_InRoomQueue;
+             }
+       break;
+    case s_InRoom: // 前一状态：房间内
+        if (plan.size() == 0) // 访问已结束
+            {
+             if (currentTask.getFloorNum() != 1) // 不在01层，进入电梯队列
+                {
+                st.description = " Transfer from room " + currentTask.xxyy + " to elevator ";
+                st.finish = beginTime + 10;
+                 prSt = s_InEleQueue;
+                }
+             else // 在01层，exit
+                {
+                st.description = " Exit ";
+                st.finish = beginTime + 30;
+                prSt = s_PlanFinished;
+                }
+             }
+       else if (preTask.getFloorNum() != currentTask.getFloorNum()) // 下一任务房间不在同一楼层，进入电梯队列
+             {
+             st.description = " Transfer from room " + preTask.xxyy + " to elevator ";
+            st.finish = beginTime + 10;
+             prSt = s_InEleQueue;
+            }
+       else // 下一任务房间在同一楼层，进入房间队列
+            {
+            st.description = " Transfer from room " + preTask.xxyy + " to room " + currentTask.xxyy;
+             st.finish = beginTime + 10;
+            prSt = s_InRoomQueue;
+             }
+       break;
+         }
+    beginTime = st.finish;
+   return st;
+    }
+
+ void agent::visit(state & h)
+ {
+    if (!h.waiting)
+        route.push_back(h);
+     }
+void agent::print()
+ {
+    printf(" %c\n ", priority);
+     for (size_t k = 0; k < route.size(); ++k)
+        {
+        route[k].print();
+        }
+    printf(" \n ");
+     }
+ int getAgent(vector < agent >&a) // 按时间顺序获得当前待处理agent
+ {
+     int x = -1;
+    int i;
+     for (i = 0; i < (int)a.size() && a[i].getPreState() == s_PlanFinished; ++i);
+     if (i == (int)a.size())
+        return x;
+    else
+        {
+        x = i;
+       for (int j = x; j < (int)a.size(); ++j)
+          {
+            if (a[j].getPreState() != s_PlanFinished && a[j].getBegintime() < a[x].getBegintime())
+              x = j;
+            }
+      return x;
+      }
+     }
+ istream & operator >> (istream & is, timmme & t)
+ {
+     char x;
+    is >> t.hour >> x >> t.minute >> x >> t.second;
+    return is;
+    }
+ istream & operator >> (istream & is, task & r)
+ {
+    is >> r.xxyy;
+     if (r.xxyy == " 0 ")
+         return is;
+    is >> r.stay;
+     return is;
+     }
+ istream & operator >> (istream & is, agent & a)
+ {
+    task tsk;
+    is >> a.priority;
+     if (a.priority == ' . ') return is;
+     is >> a.beginTime >> tsk;
+     while (tsk.xxyy != " 0 ")
+        {
+         a.plan.push_back(tsk);
+        is >> tsk;
+        }
+    return is;
+    }
+ int main()
+ {
+   int k;
+     vector < room > rm(100);
+    vector < elevator > elevt(10);
+     vector < agent > agents;
+     agent theAgent;
+     cin >> theAgent;
+    while (theAgent.getPriority() != ' . ')
+      {
+        agents.push_back(theAgent);
+        theAgent.plan.clear();
+        cin >> theAgent;
+         }
+    sort(agents.begin(), agents.end()); // 按优先级将agent排序以便于getAgent.
+     for (size_t i = 0; i < agents.size(); ++i)
+        {
+        agents[i].SetCurrentTask();
+        }
+     k = getAgent(agents);
+     while (k + 1)
+         {
+        state s = agents[k].getState(rm, elevt);
+        agents[k].visit(s);
+        k = getAgent(agents);
+         }
+     for (size_t i = 0; i < agents.size(); ++i)
+    {
+        agents[i].print();
+    }
+     }
